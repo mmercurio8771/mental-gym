@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Mental Gym – Odd/Even Reaction</title>
+  <meta name="color-scheme" content="dark" />
+  <style>
+    /* ===== Theme (inherit from other games) ===== */
+    :root{
+      --bg:#0B1010;
+      --panel:#0f1414;
+      --panel-border:#13c1b1;
+      --text:#f9fafb;
+      --muted:#9fb3b0;
+      --accent:#13c1b1;
+      --accent-2:#0ea295;
+      --ok:#2dd4bf;
+      --danger:#ef4444;
+    }
+    html,body{height:100%;margin:0;background:var(--bg);color:var(--text);
+      font:16px/1.45 system-ui,Segoe UI,Roboto,Inter,-apple-system,BlinkMacSystemFont;}
+    .screenwrap{min-height:100%;display:grid;place-items:center;padding:clamp(12px,4vw,24px);}
+    .card{width:min(640px,100%);background:linear-gradient(180deg,var(--panel),#0b1111);
+      border:1px solid var(--panel-border);border-radius:16px;box-shadow:0 16px 48px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.02);
+      padding:20px;}
+    h1{margin:0 0 6px 0;font-size:22px;letter-spacing:.2px}
+    p{margin:0 0 12px 0;color:var(--muted);font-size:14px;line-height:1.4}
+    .stats{display:flex;gap:12px;margin-top:8px;color:var(--muted);flex-wrap:wrap;font-size:14px}
+    .display{width:100%;margin:14px 0;padding:20px 16px;text-align:center;
+      font-size:clamp(24px,6vw,36px);letter-spacing:.07em;background:#0a1111;
+      border:2px dashed #1b2a2b;border-radius:14px;user-select:none;-webkit-user-select:none;-ms-user-select:none;box-sizing:border-box;}
+    .good{color:var(--ok)}
+    .accent{color:var(--accent)}
+    .danger{color:var(--danger)}
+    .row{width:100%;display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;align-items:center}
+    .btn{flex:1;text-align:center;appearance:none;cursor:pointer;padding:8px 12px;border-radius:10px;border:1px solid transparent;background:#0c1414;color:var(--text);transition:transform .06s ease, border-color .15s ease, background .15s ease;font-size:14px;}
+    .btn:hover{border-color:#223b3b}
+    .btn:active{transform:translateY(1px)}
+    .btn.primary{background:var(--accent);color:#0B1010;font-weight:600;}
+    .btn.primary:hover{background:var(--accent-2);} 
+    .btn.ghost{border:1px solid #1b2b2b;opacity:.92;}
+    @media (max-width:420px){
+      .display{font-size:34px}
+      h1{font-size:22px}
+    }
+  </style>
+</head>
+<body>
+  <div class="screenwrap">
+    <div class="card">
+      <h1>Odd/Even Reaction</h1>
+      <p>Decide if each number is odd or even as fast as you can. Ten trials – see your best and average reaction times.</p>
+      <div class="stats">
+        <div>Trial: <span id="trial">0</span>/10</div>
+        <div>Your best: <span id="best">–</span></div>
+        <div>Average: <span id="avg">–</span></div>
+      </div>
+      <div id="screen" class="display">Press Start</div>
+      <div class="row" style="margin-top:6px">
+        <button id="start" class="btn primary">Start</button>
+        <button id="btnOdd" class="btn" style="display:none">Odd</button>
+        <button id="btnEven" class="btn" style="display:none">Even</button>
+        <button id="retry" class="btn" style="display:none">Try again</button>
+        <button id="leaderboardBtn" class="btn ghost" style="display:none">Leaderboard</button>
+      </div>
+    </div>
+  </div>
+<script>
+(function(){
+  const GAME_ID = "speed:odd-even";
+  const API_BASE = "/.netlify/functions";
+  function getQueryParam(name){const u=new URL(window.location.href);return u.searchParams.get(name)||"";}
+  async function startSession(email){const r=await fetch(`${API_BASE}/session-start`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({email})});if(!r.ok) throw new Error("session failed");const{token}=await r.json();localStorage.setItem("mg_token",token);return token;}
+  async function loadScore(token,game_id){const r=await fetch(`${API_BASE}/score?game_id=${encodeURIComponent(game_id)}`,{headers:{Authorization:`Bearer ${token}`}});if(!r.ok) return null;return await r.json();}
+  async function saveScore(token,game_id,best,streak){await fetch(`${API_BASE}/score`,{method:"POST",headers:{"Content-Type":"application/json",Authorization:`Bearer ${token}`},body:JSON.stringify({game_id,best,streak})});}
+
+  const screen=document.getElementById('screen');
+  const startBtn=document.getElementById('start');
+  const btnOdd=document.getElementById('btnOdd');
+  const btnEven=document.getElementById('btnEven');
+  const retryBtn=document.getElementById('retry');
+  const leaderboardBtn=document.getElementById('leaderboardBtn');
+  const trialEl=document.getElementById('trial');
+  const bestEl=document.getElementById('best');
+  const avgEl=document.getElementById('avg');
+
+  let trial=0;
+  let times=[];
+  let best=Number(localStorage.getItem('mg_speed_oddeven_best'))||0;
+  if(best>0) bestEl.textContent=best+' ms';
+  // attempt auto session on load
+  (async()=>{
+    try{
+      const urlEmail=getQueryParam("email");
+      if(urlEmail){await startSession(urlEmail.trim().toLowerCase());}
+      const token=localStorage.getItem("mg_token");
+      if(token){const cloud=await loadScore(token,GAME_ID);if(cloud){const cloudBest=Number(cloud.best)||0;if(cloudBest>0&&(best===0||cloudBest<best)){best=cloudBest;bestEl.textContent=best+' ms';}}}
+    }catch(_){}
+  })();
+
+  let waiting=false;let showing=false;let startTime=0;let currentNum=0;let timerId=0;
+  function reset(){trial=0;times=[];trialEl.textContent='0';avgEl.textContent='–';screen.className='display';screen.textContent='Press Start';startBtn.style.display='inline-block';retryBtn.style.display='none';btnOdd.style.display='none';btnEven.style.display='none';leaderboardBtn.style.display='none';}
+  function begin(){trial=0;times=[];trialEl.textContent='0';avgEl.textContent='–';startBtn.style.display='none';retryBtn.style.display='none';leaderboardBtn.style.display='none';btnOdd.style.display='none';btnEven.style.display='none';nextTrial();}
+  function nextTrial(){if(trial>=10){finish();return;}trial++;trialEl.textContent=String(trial);
+    screen.textContent='...';screen.className='display';btnOdd.style.display='none';btnEven.style.display='none';waiting=true;const delay=Math.random()*1500+1000;timerId=setTimeout(showNumber,delay);
+  }
+  function showNumber(){waiting=false;showing=true;currentNum=Math.floor(Math.random()*9)+1;screen.textContent=String(currentNum);screen.className='display';startTime=performance.now();btnOdd.style.display='inline-block';btnEven.style.display='inline-block';}
+  function handleResponse(choice){if(!showing)return;if(currentNum%2===0 && choice==='even' || currentNum%2===1 && choice==='odd'){
+      const rt=Math.round(performance.now()-startTime);times.push(rt);screen.textContent=rt+' ms';screen.className='display good';
+    }else{
+      screen.textContent='Wrong';screen.className='display danger';
+    }
+    showing=false;btnOdd.style.display='none';btnEven.style.display='none';setTimeout(() => {avgEl.textContent=times.length?Math.round(times.reduce((a,b)=>a+b,0)/times.length)+' ms':'–';nextTrial();},600);
+  }
+  function finish(){// compute avg of correct rts
+    const correctAvg=times.length?Math.round(times.reduce((a,b)=>a+b,0)/times.length):0;
+    screen.textContent=times.length?`Done! Avg: ${correctAvg} ms`:'Done!';screen.className='display accent';
+    retryBtn.style.display='inline-block';leaderboardBtn.style.display='inline-block';btnOdd.style.display='none';btnEven.style.display='none';
+    // update best (lower is better) only if non-zero
+    if(correctAvg>0){if(best===0||correctAvg<best){best=correctAvg;localStorage.setItem('mg_speed_oddeven_best',String(best));bestEl.textContent=best+' ms';}
+      const token=localStorage.getItem('mg_token');if(token){saveScore(token,GAME_ID,best,0).catch(()=>{});} }
+    // always post to server for leaderboard (use total correct? we use best/avg) 
+    try{const email=getQueryParam('email')||'anonymous@example.com';postScore(email,GAME_ID,correctAvg,0);}catch(_){ }
+  }
+  function postScore(email,game_id,best,streak){fetch('/.netlify/functions/score',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,game_id,best,streak})}).catch(()=>{});}
+  // event listeners
+  startBtn.addEventListener('click',begin);
+  retryBtn.addEventListener('click',begin);
+  btnOdd.addEventListener('click',()=>handleResponse('odd'));
+  btnEven.addEventListener('click',()=>handleResponse('even'));
+  // Navigate to the dedicated leaderboard page for this module
+  leaderboardBtn.addEventListener('click',()=>{
+    window.location.href='/speed/odd-even/leaderboard/';
+  });
+})();
+</script>
+</body>
+</html>

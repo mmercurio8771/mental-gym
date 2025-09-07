@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Mental Gym – Stroop Switch</title>
+  <meta name="color-scheme" content="dark" />
+  <style>
+    :root{
+      --bg:#0B1010; --panel:#0f1414; --panel-border:#13c1b1; --text:#f9fafb;
+      --muted:#9fb3b0; --accent:#13c1b1; --accent-2:#0ea295; --ok:#2dd4bf; --danger:#ef4444;
+    }
+    html,body{height:100%;margin:0;background:var(--bg);color:var(--text);font:16px/1.45 system-ui,Segoe UI,Roboto,Inter,-apple-system,BlinkMacSystemFont;}
+    .screenwrap{min-height:100%;display:grid;place-items:center;padding:clamp(12px,4vw,24px);}
+    .card{width:min(640px,100%);background:linear-gradient(180deg,var(--panel),#0b1111);border:1px solid var(--panel-border);border-radius:16px;box-shadow:0 16px 48px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.02);padding:20px;position:relative;}
+    h1{margin:0 0 6px 0;font-size:22px;letter-spacing:.2px}
+    p{margin:0 0 12px 0;color:var(--muted);font-size:14px;line-height:1.4}
+    .stats{display:flex;gap:12px;margin-top:8px;color:var(--muted);flex-wrap:wrap;font-size:14px}
+    .stim{font-size:clamp(40px,10vw,56px);letter-spacing:.1em;font-weight:700;margin:20px 0;text-align:center;user-select:none;cursor:pointer;}
+    .row{width:100%;display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;align-items:center}
+    .btn{flex:1;text-align:center;appearance:none;cursor:pointer;padding:8px 12px;border-radius:10px;border:1px solid transparent;background:#0c1414;color:var(--text);transition:transform .06s ease, border-color .15s ease, background .15s ease;font-size:14px;}
+    .btn:hover{border-color:#223b3b}
+    .btn:active{transform:translateY(1px)}
+    .btn.primary{background:var(--accent);color:#0B1010;font-weight:600;}
+    .btn.primary:hover{background:var(--accent-2);} 
+    .btn.ghost{border:1px solid #1b2b2b;opacity:.92;}
+    .overlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.6);border-radius:16px;color:var(--text);font-size:24px;font-weight:600;z-index:2;}
+    .hidden{display:none;}
+  </style>
+</head>
+<body>
+  <div class="screenwrap">
+    <div class="card">
+      <h1>Stroop Switch</h1>
+      <p>Tap if the color of the word matches its meaning (first half). In the second half, tap when they do NOT match.</p>
+      <div class="stats">
+        <div>Time left: <span id="timeLeft">90</span>s</div>
+        <div>Score: <span id="score">0</span></div>
+        <div>Your best: <span id="best">–</span></div>
+      </div>
+      <div id="stim" class="stim">Press Start</div>
+      <div class="row">
+        <button id="start" class="btn primary">Start</button>
+        <button id="leaderboardBtn" class="btn ghost" style="display:none">Leaderboard</button>
+      </div>
+      <div id="ruleOverlay" class="overlay hidden">Rule changed!</div>
+    </div>
+  </div>
+<script>
+(function(){
+  const GAME_ID = "flexibility:stroop";
+  const API_BASE = "/.netlify/functions";
+  function getQueryParam(name){const u=new URL(window.location.href);return u.searchParams.get(name)||"";}
+  async function startSession(email){const r=await fetch(`${API_BASE}/session-start`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email})});if(!r.ok) throw new Error('session failed');const{token}=await r.json();localStorage.setItem('mg_token',token);return token;}
+  async function loadScore(token,game_id){const r=await fetch(`${API_BASE}/score?game_id=${encodeURIComponent(game_id)}`,{headers:{Authorization:`Bearer ${token}`}});if(!r.ok) return null;return await r.json();}
+  async function saveScore(token,game_id,best,streak){await fetch(`${API_BASE}/score`,{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${token}`},body:JSON.stringify({game_id,best,streak})});}
+  const stimEl=document.getElementById('stim');
+  const startBtn=document.getElementById('start');
+  const leaderboardBtn=document.getElementById('leaderboardBtn');
+  const timeEl=document.getElementById('timeLeft');
+  const scoreEl=document.getElementById('score');
+  const bestEl=document.getElementById('best');
+  const overlay=document.getElementById('ruleOverlay');
+  let best=Number(localStorage.getItem('mg_flexibility_stroop_best'))||0;
+  if(best>Number.MIN_SAFE_INTEGER) bestEl.textContent=best;
+  // auto session
+  (async()=>{try{const urlEmail=getQueryParam('email');if(urlEmail){await startSession(urlEmail.trim().toLowerCase());}const token=localStorage.getItem('mg_token');if(token){const cloud=await loadScore(token,GAME_ID);if(cloud){const cb=Number(cloud.best)||0;if(cb>best){best=cb;bestEl.textContent=best;}}}}catch(_){}})();
+  const words=[{word:'Red',color:'red'},{word:'Green',color:'green'},{word:'Blue',color:'blue'},{word:'Yellow',color:'yellow'}];
+  let intervalId=null;let rule='match';let timeLeft=90;let score=0;
+  function reset(){clearInterval(intervalId);intervalId=null;timeLeft=90;score=0;timeEl.textContent='90';scoreEl.textContent='0';stimEl.textContent='Press Start';stimEl.style.color=var_get('--text');startBtn.style.display='inline-block';leaderboardBtn.style.display='none';overlay.classList.add('hidden');}
+  function var_get(name){return getComputedStyle(document.documentElement).getPropertyValue(name).trim();}
+  function begin(){reset();startBtn.style.display='none';leaderboardBtn.style.display='none';stimEl.style.cursor='pointer';nextStimulus();intervalId=setInterval(()=>{timeLeft--;timeEl.textContent=String(timeLeft);if(timeLeft===45){changeRule();}if(timeLeft<=0){finish();}},1000);
+  }
+  function changeRule(){rule=(rule==='match'?'no-match':'match');overlay.textContent='Rule changed!';overlay.classList.remove('hidden');setTimeout(()=>{overlay.classList.add('hidden');},1500);
+  }
+  function nextStimulus(){const idx=Math.floor(Math.random()*words.length);const idx2=Math.floor(Math.random()*words.length);const target=words[idx];const col=words[idx2].color;stimEl.textContent=target.word;stimEl.style.color=col;stimEl.dataset.isMatch=(target.color===col);
+  }
+  function handleTap(){if(timeLeft<=0) return;const isMatch=stimEl.dataset.isMatch==='true';const shouldTap=(rule==='match'?isMatch:!isMatch);if(shouldTap){score++;stimEl.classList.add('good');}else{score--;stimEl.classList.add('bad');}
+    scoreEl.textContent=String(score);
+    setTimeout(()=>{stimEl.classList.remove('good','bad');nextStimulus();},200);
+  }
+  function finish(){clearInterval(intervalId);intervalId=null;stimEl.textContent='Done!';stimEl.style.cursor='default';startBtn.style.display='none';leaderboardBtn.style.display='inline-block';
+    // update best (highest score)
+    if(score>best){best=score;localStorage.setItem('mg_flexibility_stroop_best',String(best));bestEl.textContent=best;const token=localStorage.getItem('mg_token');if(token){saveScore(token,GAME_ID,best,0).catch(()=>{});} }
+    try{const email=getQueryParam('email')||'anonymous@example.com';postScore(email,GAME_ID,score,0);}catch(_){}
+  }
+  function postScore(email,game_id,best,streak){fetch('/.netlify/functions/score',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,game_id,best,streak})}).catch(()=>{});}
+  startBtn.addEventListener('click',begin);
+  // Navigate to the dedicated leaderboard page for this module
+  leaderboardBtn.addEventListener('click',()=>{
+    window.location.href='/flexibility/stroop/leaderboard/';
+  });
+  stimEl.addEventListener('click',handleTap);
+})();
+</script>
+</body>
+</html>

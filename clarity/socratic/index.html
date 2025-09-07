@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Clarity – Socratic Reflection</title>
+  <!-- Shared dark theme for all modules -->
+  <style>
+    :root{
+      --bg:#0b1010;
+      --panel:rgba(10,14,14,.78);
+      --rim:rgba(19,193,177,.35);
+      --glow:rgba(19,193,177,.18);
+      --text:#f2fbf9;
+      --muted:#9fb3b0;
+      --accent:#13c1b1;
+    }
+    html,body{margin:0;background:var(--bg);color:var(--text);
+      font:500 16px/1.5 system-ui,Segoe UI,Inter,Arial,sans-serif;
+    }
+    .wrap{max-width:920px;margin:20px auto;padding:16px;}
+    .panel{background:var(--panel);border-radius:12px;padding:16px;
+      box-shadow:0 0 0 1px rgba(255,255,255,.06),0 20px 80px var(--glow);
+    }
+    label{display:block;margin-bottom:8px;}
+    label span{display:block;font-weight:600;margin-bottom:4px;}
+    input,textarea,select{background:#0f1414;color:var(--text);
+      border:1px solid rgba(255,255,255,.12);border-radius:8px;
+      padding:10px;width:100%;
+    }
+    textarea{min-height:60px;resize:vertical;}
+    button{background:rgba(0,0,0,.55);color:var(--text);
+      border:2px solid rgba(255,255,255,.85);border-radius:8px;
+      padding:8px 12px;font-weight:600;cursor:pointer;
+      font-size:14px;
+    }
+    .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px;}
+    .muted{color:var(--muted);font-size:14px;margin-top:6px;}
+    #report{width:100%;min-height:120px;margin-top:12px;display:none;font-size:14px;line-height:1.4;}
+
+    /* Details prompts collapse by default to save vertical space */
+    details{
+      margin-bottom:8px;
+      border:1px solid rgba(255,255,255,.12);
+      border-radius:8px;
+      background:#0f1414;
+    }
+    summary{
+      padding:8px;
+      font-weight:600;
+      cursor:pointer;
+      list-style:none;
+      position:relative;
+    }
+    /* Add caret indicator */
+    summary::after{
+      content:"▸";
+      position:absolute;
+      right:8px;
+      transition:transform .2s ease;
+    }
+    details[open] summary::after{
+      transform:rotate(90deg);
+    }
+    details[open] summary{
+      border-bottom:1px solid rgba(255,255,255,.12);
+    }
+    details textarea{
+      width:100%;
+      border:0;
+      background:transparent;
+      padding:8px;
+      font-size:14px;
+      color:var(--text);
+      min-height:60px;
+      resize:vertical;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="panel" role="main">
+      <h1>Socratic Reflection</h1>
+      <p class="muted">Reflect on your ideas by answering the prompts below. When finished, generate a report and optionally save or download it.</p>
+      <form id="socraticForm">
+        <label for="topic"><span>Topic</span>
+          <input id="topic" name="topic" type="text" autocomplete="off" required />
+        </label>
+        <label for="claim"><span>Claim</span>
+          <textarea id="claim" name="claim" required></textarea>
+        </label>
+        <!-- Use collapsible prompts to save vertical space -->
+        <details>
+          <summary>Definitions</summary>
+          <textarea id="definitions" name="definitions"></textarea>
+        </details>
+        <details>
+          <summary>Assumptions</summary>
+          <textarea id="assumptions" name="assumptions"></textarea>
+        </details>
+        <details>
+          <summary>Disconfirming evidence</summary>
+          <textarea id="disconfirm" name="disconfirm"></textarea>
+        </details>
+        <details>
+          <summary>Steelman (strongest opposing view)</summary>
+          <textarea id="steelman" name="steelman"></textarea>
+        </details>
+        <details>
+          <summary>Potential failure conditions</summary>
+          <textarea id="failure" name="failure"></textarea>
+        </details>
+        <details>
+          <summary>Revised claim</summary>
+          <textarea id="revised" name="revised"></textarea>
+        </details>
+      </form>
+      <div class="row">
+        <button id="generate" type="button">Generate Report</button>
+        <button id="save" type="button" style="display:none;">Save session</button>
+        <button id="download" type="button" style="display:none;">Download .txt</button>
+      </div>
+      <textarea id="report" aria-label="Clarity Report"></textarea>
+    </div>
+  </div>
+
+  <!-- Score helper script (reads email and posts to backend) -->
+  <script>
+  function getEmail(){return new URLSearchParams(location.search).get('email')||'anonymous@example.com'}
+  async function postScore(email, game_id, best, streak){
+    try{
+      const r=await fetch('/.netlify/functions/score',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({email,game_id,best,streak})});
+      if(!r.ok) console.warn('Score post failed',await r.text());
+    }catch(e){console.warn('Score post error',e)}
+  }
+  </script>
+
+  <!-- Socratic reflection logic -->
+  <script>
+  (function(){
+    const email = getEmail();
+    let cyclesCompleted = 0;
+    const form = document.getElementById('socraticForm');
+    const reportArea = document.getElementById('report');
+    const generateBtn = document.getElementById('generate');
+    const saveBtn = document.getElementById('save');
+    const downloadBtn = document.getElementById('download');
+    function buildReport(){
+      const data = {};
+      new FormData(form).forEach((value,key) => { data[key] = value.trim(); });
+      let report = '';
+      report += `Topic: ${data.topic || ''}\n\n`;
+      report += `Claim:\n${data.claim || ''}\n\n`;
+      report += `Definitions:\n${data.definitions || ''}\n\n`;
+      report += `Assumptions:\n${data.assumptions || ''}\n\n`;
+      report += `Disconfirming evidence:\n${data.disconfirm || ''}\n\n`;
+      report += `Steelman (strongest opposing view):\n${data.steelman || ''}\n\n`;
+      report += `Potential failure conditions:\n${data.failure || ''}\n\n`;
+      report += `Revised claim:\n${data.revised || ''}`;
+      return report.trim();
+    }
+    generateBtn.addEventListener('click', function(){
+      // validate required fields (topic and claim)
+      if(!form.reportValidity()){
+        return;
+      }
+      const report = buildReport();
+      reportArea.value = report;
+      reportArea.style.display = 'block';
+      saveBtn.style.display = 'inline-block';
+      downloadBtn.style.display = 'inline-block';
+      // focus report for accessibility
+      reportArea.focus();
+    });
+    saveBtn.addEventListener('click', function(){
+      cyclesCompleted++;
+      try{ postScore(email, 'clarity:socratic-reflection', cyclesCompleted, 0); }catch(_){}
+      // Provide simple feedback
+      saveBtn.textContent = 'Saved!';
+      saveBtn.disabled = true;
+      setTimeout(() => {
+        saveBtn.disabled = false;
+        saveBtn.textContent = 'Save session';
+      }, 1500);
+    });
+    downloadBtn.addEventListener('click', function(){
+      const text = reportArea.value;
+      const blob = new Blob([text], {type:'text/plain'});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'clarity-report.txt';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 0);
+    });
+  })();
+  </script>
+</body>
+</html>

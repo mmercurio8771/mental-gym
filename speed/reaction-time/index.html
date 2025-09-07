@@ -1,0 +1,364 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Mental Gym – Reaction Time</title>
+  <meta name="color-scheme" content="dark">
+  <style>
+    /* ===== Theme ===== */
+    :root{
+      --bg:#0B1010;
+      --panel:#0f1414;
+      --panel-border:#13c1b1;
+      --text:#f9fafb;
+      --muted:#9fb3b0;
+      --accent:#13c1b1;
+      --accent-2:#0ea295;
+      --ok:#2dd4bf;
+      --danger:#ef4444;
+    }
+
+    /* ===== Page layout ===== */
+    html,body{height:100%;margin:0;background:var(--bg);color:var(--text);
+      font:16px/1.45 system-ui,Segoe UI,Roboto,Inter,-apple-system,BlinkMacSystemFont;}
+    .screenwrap{
+      min-height:100%;
+      display:grid;
+      place-items:center;                /* centers the card on screen */
+      padding:clamp(12px, 4vw, 24px);
+    }
+
+    /* ===== Card ===== */
+    .card{
+      width:min(640px, 100%);
+      background:linear-gradient(180deg,var(--panel),#0b1111);
+      border:1px solid var(--panel-border);
+      border-radius:16px;
+      box-shadow:0 16px 48px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.02);
+      padding:20px;
+    }
+    /* Reduce heading and paragraph sizes */
+    h1{margin:0 0 6px 0; font-size:22px; letter-spacing:.2px}
+    p{margin:0 0 12px 0; color:var(--muted); font-size:14px; line-height:1.4}
+    .stats{display:flex; gap:12px; margin-top:8px; color:var(--muted); flex-wrap:wrap; font-size:14px}
+
+    /* ===== Display ===== */
+    .display{
+      width:100%;
+      margin:14px 0;
+      padding:20px 16px;
+      text-align:center;
+      font-size:clamp(24px, 6vw, 36px);
+      letter-spacing:.07em;
+      background:#0a1111;
+      border:2px dashed #1b2a2b;
+      border-radius:14px;
+      user-select:none;
+      -webkit-user-select:none;
+      -ms-user-select:none;
+      box-sizing:border-box;
+    }
+    .good{color:var(--ok)}
+    .accent{color:var(--accent)}
+    .danger{color:var(--danger)}
+
+    /* ===== Buttons (clean spacing) ===== */
+    .row{width:100%; display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; align-items:center}
+  .btn{
+    flex:1;
+    text-align:center;
+    appearance:none;
+    cursor:pointer;
+    padding:8px 12px;
+    border-radius:10px;
+    border:1px solid transparent;
+    background:#0c1414;
+    color:var(--text);
+    transition:transform .06s ease, border-color .15s ease, background .15s ease;
+    font-size:14px;
+  }
+  .btn:hover{border-color:#223b3b}
+  .btn:active{transform:translateY(1px)}
+  .btn.primary{
+    background:var(--accent);
+    color:#0B1010;
+    font-weight:600;
+  }
+  .btn.primary:hover{
+    background:var(--accent-2);
+  }
+  .btn.ghost{
+    border:1px solid #1b2b2b;
+    opacity:.92;
+  }
+
+    /* Small screens */
+    @media (max-width:420px){
+      .display{font-size:34px}
+      h1{font-size:22px}
+    }
+  </style>
+</head>
+<body>
+  <div class="screenwrap">
+    <div class="card">
+      <h1>Reaction Time</h1>
+      <p>Tap when you see “GO!”. Five trials – see your best and average reaction times.</p>
+
+      <div class="stats">
+        <div>Trial: <span id="trial">0</span>/5</div>
+        <div>Your best: <span id="best">–</span></div>
+        <div>Average: <span id="avg">–</span></div>
+      </div>
+
+      <div id="screen" class="display">Press Start</div>
+
+      <div class="row" style="margin-top:6px">
+        <button id="start" class="btn primary">Start</button>
+        <button id="retry" class="btn" style="display:none">Try again</button>
+        <button id="leaderboardBtn" class="btn ghost" style="display:none">Leaderboard</button>
+      </div>
+    </div>
+  </div>
+
+<script>
+(function(){
+  // --- HYBRID SAVING ADDITIONS (cloud + local) ---
+  const GAME_ID = "speed:reaction-time";
+  const API_BASE = "/.netlify/functions";
+
+  function getQueryParam(name){
+    const u = new URL(window.location.href);
+    return u.searchParams.get(name) || "";
+  }
+
+  async function startSession(email){
+    const r = await fetch(`${API_BASE}/session-start`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email })
+    });
+    if (!r.ok) throw new Error("session failed");
+    const { token } = await r.json();
+    localStorage.setItem("mg_token", token);
+    return token;
+  }
+
+  async function loadScore(token, game_id){
+    const r = await fetch(`${API_BASE}/score?game_id=${encodeURIComponent(game_id)}`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    if (!r.ok) return null;
+    return await r.json();
+  }
+
+  async function saveScore(token, game_id, best, streak){
+    await fetch(`${API_BASE}/score`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ game_id, best, streak })
+    });
+  }
+  // --- END HYBRID SAVING ADDITIONS ---
+
+  const screen = document.getElementById('screen');
+  const startBtn = document.getElementById('start');
+  const retryBtn = document.getElementById('retry');
+  const leaderboardBtn = document.getElementById('leaderboardBtn');
+  const trialEl = document.getElementById('trial');
+  const bestEl = document.getElementById('best');
+  const avgEl = document.getElementById('avg');
+
+  let trial = 0;
+  let times = [];
+  let best = Number(localStorage.getItem('mg_speed_best')) || 0;
+  // Display best if present
+  if (best > 0) bestEl.textContent = best + ' ms';
+
+  // Attempt auto session on load
+  (async () => {
+    try {
+      const urlEmail = getQueryParam("email");
+      if (urlEmail) {
+        await startSession(urlEmail.trim().toLowerCase());
+      }
+      const token = localStorage.getItem("mg_token");
+      if (token) {
+        const cloud = await loadScore(token, GAME_ID);
+        if (cloud) {
+          const cloudBest = Number(cloud.best) || 0;
+          // For reaction time, lower is better. Use min non-zero.
+          if (cloudBest > 0) {
+            if (best === 0 || cloudBest < best) {
+              best = cloudBest;
+              bestEl.textContent = best + ' ms';
+            }
+          }
+        }
+      }
+    } catch (_) {
+      // silently fail, local only
+    }
+  })();
+
+  let waitingTimeout = null;
+  let readyAt = 0;
+  let state = 'idle'; // 'idle', 'waiting', 'ready', 'result', 'done'
+
+  function resetGame(){
+    trial = 0;
+    times = [];
+    trialEl.textContent = '0';
+    avgEl.textContent = '–';
+    startBtn.style.display = 'inline-block';
+    retryBtn.style.display = 'none';
+    leaderboardBtn.style.display = 'none';
+    screen.textContent = 'Press Start';
+    state = 'idle';
+  }
+
+  function updateStats(){
+    trialEl.textContent = trial;
+    if (times.length > 0) {
+      const sum = times.reduce((a,b) => a+b, 0);
+      const avg = Math.round(sum / times.length);
+      avgEl.textContent = avg + ' ms';
+    } else {
+      avgEl.textContent = '–';
+    }
+    if (best > 0) bestEl.textContent = best + ' ms';
+  }
+
+  async function persistBest(){
+    // Save locally
+    localStorage.setItem('mg_speed_best', best);
+    const token = localStorage.getItem("mg_token");
+    if (token) {
+      try { await saveScore(token, GAME_ID, best, 0); } catch (_) {}
+    }
+  }
+
+  function runTrial(){
+    state = 'waiting';
+    trial++;
+    updateStats();
+    screen.textContent = 'Wait…';
+    // random delay between 1000–3000ms
+    const delay = 1000 + Math.random() * 2000;
+    waitingTimeout = setTimeout(() => {
+      state = 'ready';
+      readyAt = performance.now();
+      screen.innerHTML = '<span class="accent">GO!</span>';
+    }, delay);
+  }
+
+  function finishSession(){
+    state = 'done';
+    // compute session best and update overall best
+    if (times.length > 0) {
+      const sessionBest = Math.min(...times);
+      if (best === 0 || sessionBest < best) {
+        best = sessionBest;
+        bestEl.textContent = best + ' ms';
+        persistBest();
+      }
+    }
+    // Show summary and buttons
+    const sum = times.reduce((a,b) => a+b, 0);
+    const avg = times.length ? Math.round(sum / times.length) : 0;
+    let listHtml = '<div style="margin-bottom:8px">Your times:</div><ol style="padding-left:20px;text-align:left">';
+    times.forEach((t,i) => {
+      listHtml += `<li>Trial ${i+1}: ${Math.round(t)} ms</li>`;
+    });
+    listHtml += '</ol>';
+    listHtml += `<div style="margin-top:8px">Session best: <strong>${Math.round(Math.min(...times))} ms</strong></div>`;
+    listHtml += `<div>Session average: <strong>${avg} ms</strong></div>`;
+    screen.innerHTML = listHtml;
+    retryBtn.style.display = 'inline-block';
+    leaderboardBtn.style.display = 'inline-block';
+    startBtn.style.display = 'none';
+  }
+
+  screen.addEventListener('click', () => {
+    if (state === 'waiting') {
+      // clicked too soon
+      clearTimeout(waitingTimeout);
+      state = 'result';
+      screen.innerHTML = '<span class="danger">Too soon!</span><br/>Tap Start to try again.';
+      retryBtn.style.display = 'inline-block';
+      startBtn.style.display = 'none';
+      trial--;
+      return;
+    }
+    if (state === 'ready') {
+      const now = performance.now();
+      const ms = now - readyAt;
+      times.push(ms);
+      screen.innerHTML = `Reaction time: <span class="good">${Math.round(ms)} ms</span><br/><span style="font-size:14px;color:var(--muted);">Tap to continue…</span>`;
+      state = 'result';
+      updateStats();
+      // After one click, waiting for next tap to start next trial
+      return;
+    }
+    if (state === 'result') {
+      if (trial < 5) {
+        runTrial();
+      } else {
+        finishSession();
+      }
+    }
+  });
+
+  startBtn.onclick = () => {
+    startBtn.style.display='none';
+    retryBtn.style.display='none';
+    leaderboardBtn.style.display='none';
+    trial = 0;
+    times = [];
+    updateStats();
+    runTrial();
+  };
+  retryBtn.onclick = resetGame;
+  leaderboardBtn.onclick = () => {
+    window.location.href = '/speed/leaderboard/';
+  };
+
+})();
+</script>
+
+<!-- AUTO-RESIZE SCRIPT (stable, no infinite growth) -->
+<script>
+(function () {
+  // If running inside an iframe, drop min-height:100% so height doesn't chase the parent
+  try {
+    if (window.parent !== window) {
+      document.documentElement.style.height = "auto";
+      document.body.style.height = "auto";
+      var sw = document.querySelector(".screenwrap");
+      if (sw) sw.style.minHeight = "auto";
+    }
+  } catch (e) {}
+
+  function getContentHeight() {
+    // Measure just the card + a little breathing room
+    var card = document.querySelector(".card");
+    var h = card ? Math.ceil(card.getBoundingClientRect().height) + 24 : document.body.scrollHeight;
+    return h;
+  }
+
+  function postHeight() {
+    var h = getContentHeight();
+    try { parent.postMessage({ frame: "reaction-time", height: h }, "*"); } catch (e) {}
+  }
+
+  // Fire on load/resize and whenever layout changes
+  window.addEventListener("load", postHeight);
+  window.addEventListener("resize", postHeight);
+  var ro = new ResizeObserver(postHeight);
+  ro.observe(document.body);
+})();
+</script>
+
+</body>
+</html>

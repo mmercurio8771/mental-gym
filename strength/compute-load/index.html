@@ -1,0 +1,433 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Strength – Compute Load</title>
+  <!-- Dark mode palette and base layout. All modules share this theme. -->
+  <style>
+    :root{
+      --bg:#0b1010;
+      --panel:rgba(10,14,14,.78);
+      --rim:rgba(19,193,177,.35);
+      --glow:rgba(19,193,177,.18);
+      --text:#f2fbf9;
+      --muted:#9fb3b0;
+      --accent:#13c1b1;
+    }
+    html,body{margin:0;background:var(--bg);color:var(--text);
+      font:500 16px/1.5 system-ui,Segoe UI,Inter,Arial,sans-serif;
+    }
+    .wrap{max-width:920px;margin:20px auto;padding:16px;}
+    .panel{background:var(--panel);border-radius:12px;padding:16px;
+      box-shadow:0 0 0 1px rgba(255,255,255,.06),0 20px 80px var(--glow);
+    }
+    .row{display:flex;gap:10px;align-items:center;}
+    button{background:rgba(0,0,0,.55);color:var(--text);
+      border:2px solid rgba(255,255,255,.85);border-radius:10px;
+      padding:10px 14px;font-weight:700;cursor:pointer;
+    }
+    input,textarea,select{background:#0f1414;color:var(--text);
+      border:1px solid rgba(255,255,255,.12);border-radius:8px;
+      padding:10px;width:100%;
+    }
+    .muted{color:var(--muted);}
+    /* Module specific styles */
+    /* Heading size tuned down to fit smaller viewports */
+    h1{margin:0 0 8px;font-size:22px;}
+    /* Question and answer containers use tighter spacing to avoid overflow */
+    #questionContainer{
+      margin:12px 0;
+      min-height:80px;
+      max-height:150px;
+      overflow-y:auto;
+    }
+    #answerContainer{
+      margin:12px 0;
+      display:flex;
+      flex-direction:column;
+      align-items:flex-start;
+      max-height:150px;
+      overflow-y:auto;
+    }
+    #answerContainer input[type="text"],
+    #answerContainer input[type="number"]{
+      width:100%;
+      font-size:18px;
+      border:2px solid rgba(255,255,255,.25);
+      border-radius:8px;
+      padding:10px;
+    }
+    /* Choice buttons layout: using buttons instead of radio to avoid host styling */
+    #answerContainer .choice-buttons{
+      display:flex;
+      flex-direction:column;
+      gap:6px;
+      width:100%;
+    }
+    #answerContainer .choice-btn{
+      width:100%;
+      background:rgba(0,0,0,.4);
+      border:1px solid rgba(255,255,255,.2);
+      border-radius:8px;
+      padding:8px 10px;
+      color:var(--text);
+      font-size:15px;
+      text-align:left;
+      cursor:pointer;
+      transition:background .15s ease, border-color .15s ease;
+    }
+    #answerContainer .choice-btn:hover{
+      background:rgba(0,0,0,.6);
+      border-color:rgba(255,255,255,.4);
+    }
+    #answerContainer .choice-btn.selected{
+      border-color:var(--accent);
+      background:rgba(19,193,177,.2);
+    }
+    #timer{font-weight:700;}
+    #scoreDisplay{font-weight:700;}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="panel" role="main">
+      <h1>Compute Load</h1>
+      <div class="row" style="justify-content: space-between; flex-wrap: wrap;">
+        <div>Time left: <span id="timer">120</span>s</div>
+        <div>Correct: <span id="scoreDisplay">0</span></div>
+        <div>Your best: <span id="bestDisplay">0</span></div>
+      </div>
+      <div id="questionContainer" aria-live="polite"></div>
+      <div id="answerContainer" class="row"></div>
+
+      <!-- Leaderboard button (hidden until session end) -->
+      <div class="row" style="margin-top:16px; justify-content:center;">
+        <button id="leaderboardBtn" style="display:none">Leaderboard</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Score helper: reads email from query and posts to Netlify function. -->
+  <script>
+  function getEmail(){return new URLSearchParams(location.search).get('email')||'anonymous@example.com'}
+  async function postScore(email, game_id, best, streak){
+    try{
+      const r=await fetch('/.netlify/functions/score',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({email,game_id,best,streak})});
+      if(!r.ok) console.warn('Score post failed',await r.text());
+    }catch(e){console.warn('Score post error',e)}
+  }
+  </script>
+
+  <!-- Compute Load game logic -->
+  <script>
+  (function(){
+    const email = getEmail();
+    // --- Hybrid saving additions (cloud + local) ---
+    const GAME_ID = 'strength:compute-load';
+    const API_BASE = '/.netlify/functions';
+    function getQueryParam(name){ const u = new URL(window.location.href); return u.searchParams.get(name)||''; }
+    async function startSession(email){
+      const r = await fetch(`${API_BASE}/session-start`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ email }) });
+      if(!r.ok) throw new Error('session failed');
+      const { token } = await r.json();
+      localStorage.setItem('mg_token', token);
+      return token;
+    }
+    async function loadScore(token, game_id){
+      const r = await fetch(`${API_BASE}/score?game_id=${encodeURIComponent(game_id)}`, { headers:{ Authorization: `Bearer ${token}` } });
+      if(!r.ok) return null;
+      return await r.json();
+    }
+    async function saveScore(token, game_id, best, streak){
+      await fetch(`${API_BASE}/score`, { method:'POST', headers:{ 'Content-Type':'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify({ game_id, best, streak }) });
+    }
+    // Retrieve best from local storage and display; later we may update from cloud
+    let best = Number(localStorage.getItem('mg_strength_best')) || 0;
+    const bestEl = document.getElementById('bestDisplay');
+    if(best > 0){ bestEl.textContent = best; }
+    // Attempt auto-session and load score
+    (async () => {
+      try{
+        const urlEmail = getQueryParam('email');
+        if(urlEmail){ await startSession(urlEmail.trim().toLowerCase()); }
+        const token = localStorage.getItem('mg_token');
+        if(token){
+          const cloud = await loadScore(token, GAME_ID);
+          if(cloud){ const cloudBest = Number(cloud.best) || 0; if(cloudBest > best){ best = cloudBest; bestEl.textContent = best; } }
+        }
+      }catch(_){/* silent */}
+    })();
+    let totalCorrect = 0;
+    let sessionEnd = Date.now() + 120000; // 120 seconds
+    let timerId;
+    // Flag: true -> next question is math, false -> reading. Toggles after each answer.
+    let askMath = true;
+    const timerEl = document.getElementById('timer');
+    const scoreEl = document.getElementById('scoreDisplay');
+    const qContainer = document.getElementById('questionContainer');
+    const aContainer = document.getElementById('answerContainer');
+    const leaderboardBtn = document.getElementById('leaderboardBtn');
+
+    // Set leaderboard navigation handler. Navigates to the strength leaderboard page when clicked.
+    leaderboardBtn.onclick = () => {
+      window.location.href = '/strength/leaderboard/';
+    };
+
+    // Passages for micro‑reading. Each text is 50–80 words followed by a
+    // single inference question. Cycling through these encourages careful
+    // reading without overwhelming the player. Feel free to expand this
+    // collection as needed.
+    const readings = [
+      {
+        text: `Large migratory birds travel thousands of miles between breeding and wintering grounds each year. These journeys are guided by inherited instinct and cues like daylight and magnetic fields. Climate change is altering the timing of food availability, which threatens the survival of these long‑distance travelers.`,
+        question: "What challenge to migratory birds is mentioned?",
+        choices: [
+          "Shifts in food availability due to climate change",
+          "Loss of navigation instincts",
+          "Increased tourism in nesting areas"
+        ],
+        answer: 0
+      },
+      {
+        text: `When scientists study memory, they often use simple mazes to assess how well an animal recalls the layout of its environment. Over repeated trials the animal learns to navigate more efficiently. If the route is changed unexpectedly, performance drops, revealing how memory adapts to new information.`,
+        question: "What does a drop in performance indicate?",
+        choices: [
+          "That the route changed unexpectedly",
+          "That the animal is tired",
+          "That the maze was too easy"
+        ],
+        answer: 0
+      },
+      {
+        text: `Urban gardening has grown popular as city dwellers convert balconies and rooftops into miniature farms. These efforts provide fresh produce, beautify neighborhoods, and create habitats for pollinators. However, gardeners must contend with limited space and inconsistent access to sunlight across the seasons.`,
+        question: "What is one challenge urban gardeners face?",
+        choices: [
+          "Limited space and inconsistent sunlight",
+          "Finding enough pollinators",
+          "Excessive rainfall"
+        ],
+        answer: 0
+      },
+      {
+        text: `In team sports coaches emphasize communication because players must coordinate positions and strategies quickly. Clear signals and shared terminology help teammates react to rapidly changing situations, especially in high‑pressure matches where split‑second decisions matter. Without coordination even skilled athletes can falter against well‑organized opponents.`,
+        question: "Why is communication important in team sports according to the passage?",
+        choices: [
+          "It allows players to coordinate strategies quickly",
+          "It ensures athletes are physically fit",
+          "It reduces training time"
+        ],
+        answer: 0
+      },
+      {
+        text: `Renewable energy sources like wind turbines have become more efficient thanks to advances in materials science. Engineers now design blades that are lighter and stronger, enabling turbines to generate electricity at lower wind speeds. The challenge remains to integrate these variable sources reliably into existing power grids.`,
+        question: "What advantage do modern turbine blades provide?",
+        choices: [
+          "They produce power even at lower wind speeds",
+          "They require no maintenance",
+          "They eliminate the need for power grids"
+        ],
+        answer: 0
+      }
+    ];
+    let readingIndex = 0;
+
+    function updateTimer(){
+      const now = Date.now();
+      const remaining = sessionEnd - now;
+      const secs = Math.max(0, Math.ceil(remaining/1000));
+      timerEl.textContent = secs;
+      if(secs <= 0){
+        finishSession();
+      }
+    }
+
+    // Generate a math question with increasing difficulty based on score.
+    function genMath(){
+      const difficulty = Math.min(3, Math.floor(totalCorrect / 5));
+      let ops;
+      if(difficulty === 0) ops = ['+','-'];
+      else if(difficulty === 1) ops = ['+','-','*'];
+      else ops = ['+','-','*','/'];
+      const op = ops[Math.floor(Math.random()*ops.length)];
+      let a,b,question,answer;
+      if(op === '+'){
+        const max = 20 * (difficulty+1);
+        a = 1 + Math.floor(Math.random()*max);
+        b = 1 + Math.floor(Math.random()*max);
+        question = `${a} + ${b}`;
+        answer = a + b;
+      } else if(op === '-'){
+        const max = 20 * (difficulty+1);
+        a = 1 + Math.floor(Math.random()*max);
+        b = 1 + Math.floor(Math.random()*max);
+        if(a < b){ const tmp = a; a = b; b = tmp; }
+        question = `${a} − ${b}`;
+        answer = a - b;
+      } else if(op === '*'){
+        const maxA = difficulty < 2 ? 9 : 12;
+        const maxB = difficulty < 2 ? 9 : 12;
+        a = 2 + Math.floor(Math.random()*maxA);
+        b = 2 + Math.floor(Math.random()*maxB);
+        question = `${a} × ${b}`;
+        answer = a * b;
+      } else { // division, ensure clean integer
+        const maxDiv = 10 + difficulty*5;
+        const divisor = 2 + Math.floor(Math.random()*maxDiv);
+        const quotient = 2 + Math.floor(Math.random()*maxDiv);
+        const dividend = divisor * quotient;
+        question = `${dividend} ÷ ${divisor}`;
+        answer = quotient;
+      }
+      return {question, answer};
+    }
+
+    function showMath(){
+      const {question, answer} = genMath();
+      qContainer.innerHTML = `<div style="font-size:22px;">${question}</div>`;
+      aContainer.innerHTML = '';
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.setAttribute('aria-label','Answer');
+      input.autocomplete = 'off';
+      input.addEventListener('keydown', function(e){
+        if(e.key === 'Enter'){
+          e.preventDefault();
+          const userVal = input.value.trim();
+          const num = Number(userVal);
+          const isCorrect = !isNaN(num) && num === answer;
+          answerSubmitted(isCorrect);
+        }
+      });
+      aContainer.appendChild(input);
+      setTimeout(() => { input.focus(); }, 10);
+    }
+
+    function showReading(){
+      if(readingIndex >= readings.length) readingIndex = 0;
+      const item = readings[readingIndex++];
+      qContainer.innerHTML = '';
+      const para = document.createElement('p');
+      // Use tighter margin and smaller font size to fit within viewport
+      para.style.marginBottom = '8px';
+      para.style.fontSize = '15px';
+      para.textContent = item.text;
+      qContainer.appendChild(para);
+      const q = document.createElement('div');
+      q.textContent = item.question;
+      q.style.fontWeight = '600';
+      q.style.fontSize = '16px';
+      q.style.marginBottom = '6px';
+      qContainer.appendChild(q);
+      aContainer.innerHTML = '';
+      const container = document.createElement('div');
+      container.className = 'choice-buttons';
+      let selectedIndex = -1;
+      // create choice buttons
+      item.choices.forEach((choice, idx) => {
+        const btnChoice = document.createElement('button');
+        btnChoice.type = 'button';
+        btnChoice.className = 'choice-btn';
+        btnChoice.setAttribute('data-idx', idx);
+        btnChoice.textContent = `${idx + 1}. ${choice}`;
+        btnChoice.addEventListener('click', () => {
+          // toggle selection
+          const all = container.querySelectorAll('.choice-btn');
+          all.forEach(b => b.classList.remove('selected'));
+          btnChoice.classList.add('selected');
+          selectedIndex = idx;
+        });
+        container.appendChild(btnChoice);
+      });
+      aContainer.appendChild(container);
+      // keyboard shortcuts for selecting answers
+      function keyHandler(e){
+        const key = e.key;
+        if(/^[1-4]$/.test(key)){
+          const idx = parseInt(key,10) - 1;
+          const btns = container.querySelectorAll('.choice-btn');
+          if(btns[idx]){
+            btns.forEach(b => b.classList.remove('selected'));
+            btns[idx].classList.add('selected');
+            selectedIndex = idx;
+          }
+        } else if(e.key === 'Enter'){
+          e.preventDefault();
+          submitChoice();
+        }
+      }
+      document.addEventListener('keydown', keyHandler);
+      function submitChoice(){
+        document.removeEventListener('keydown', keyHandler);
+        const isCorrect = (selectedIndex === item.answer);
+        answerSubmitted(isCorrect);
+      }
+      // Submit button
+      const btn = document.createElement('button');
+      btn.textContent = 'Submit';
+      btn.style.marginTop = '8px';
+      btn.addEventListener('click', function(){ submitChoice(); });
+      aContainer.appendChild(btn);
+      setTimeout(() => {
+        const first = container.querySelector('.choice-btn');
+        if(first) first.focus();
+      }, 10);
+    }
+
+    // Handle an answer submission. Increments score if correct and schedules next question or finish.
+    function answerSubmitted(isCorrect){
+      if(isCorrect) totalCorrect++;
+      scoreEl.textContent = totalCorrect;
+      if(Date.now() < sessionEnd){
+        // Toggle between math and reading. Use a zero‑delay timeout
+        // to ensure the flag change takes effect before the next prompt
+        askMath = !askMath;
+        setTimeout(() => {
+          nextQuestion();
+        }, 0);
+      } else {
+        finishSession();
+      }
+    }
+
+    function nextQuestion(){
+      if(askMath) showMath();
+      else showReading();
+    }
+
+    function finishSession(){
+      clearInterval(timerId);
+      // Disable any input by clearing container
+      qContainer.innerHTML = '';
+      aContainer.innerHTML = '';
+      const endMsg = document.createElement('div');
+      endMsg.style.fontSize = '22px';
+      endMsg.style.marginTop = '20px';
+      endMsg.innerHTML = `Session complete!<br/>You answered <strong>${totalCorrect}</strong> correctly.`;
+      qContainer.appendChild(endMsg);
+      // Update best and persist if this session exceeds prior best
+      if (totalCorrect > best) {
+        best = totalCorrect;
+        bestEl.textContent = best;
+        // Save locally
+        try { localStorage.setItem('mg_strength_best', best.toString()); } catch(_) {}
+        // Save to cloud (non-blocking)
+        const token = localStorage.getItem('mg_token');
+        if (token) {
+          try { saveScore(token, GAME_ID, best, 0); } catch(_) {}
+        }
+      }
+      // Post this session's score (non-blocking)
+      try { postScore(email, GAME_ID, totalCorrect, 0); } catch(_) {}
+      // Show leaderboard button
+      leaderboardBtn.style.display = 'inline-block';
+    }
+
+    // Initialize timer and first question
+    timerId = setInterval(updateTimer, 500);
+    nextQuestion();
+  })();
+  </script>
+</body>
+</html>

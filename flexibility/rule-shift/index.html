@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Flexibility – Rule Shift</title>
+  <!-- Shared dark theme -->
+  <style>
+    :root{
+      --bg:#0b1010;
+      --panel:rgba(10,14,14,.78);
+      --rim:rgba(19,193,177,.35);
+      --glow:rgba(19,193,177,.18);
+      --text:#f2fbf9;
+      --muted:#9fb3b0;
+      --accent:#13c1b1;
+    }
+    html,body{margin:0;background:var(--bg);color:var(--text);
+      font:500 16px/1.5 system-ui,Segoe UI,Inter,Arial,sans-serif;
+    }
+    .wrap{max-width:920px;margin:20px auto;padding:16px;}
+    .panel{background:var(--panel);border-radius:12px;padding:16px;
+      box-shadow:0 0 0 1px rgba(255,255,255,.06),0 20px 80px var(--glow);
+    }
+    .row{display:flex;gap:10px;align-items:center;}
+    .muted{color:var(--muted);}
+    /* Reduce heading and text sizes for compact layout */
+    h1{margin:0 0 8px;font-size:22px;}
+    #ruleText{
+      font-size:18px;
+      font-weight:600;
+      margin:10px 0;
+      min-height:24px;
+    }
+    /* Stimulus area tuned down to fit viewport */
+    #stimulus{
+      height:120px;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      margin-top:16px;
+      min-height:100px;
+    }
+    #stimulus .shape{font-size:60px;line-height:1;}
+    #stimulus .number{font-size:36px;margin-left:10px;}
+    #overlay{position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.6);
+      display:flex;align-items:center;justify-content:center;z-index:10;color:var(--text);font-size:22px;text-align:center;}
+    button{background:rgba(0,0,0,.55);color:var(--text);
+      border:2px solid rgba(255,255,255,.85);border-radius:10px;
+      padding:10px 14px;font-weight:700;cursor:pointer;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="panel" role="main">
+      <h1>Rule Shift</h1>
+      <div class="row" style="justify-content: space-between; flex-wrap: wrap;">
+        <div>Time left: <span id="timer">90</span>s</div>
+        <div>Score: <span id="scoreDisplay">0</span></div>
+      </div>
+      <div id="ruleText" aria-live="polite"></div>
+      <div id="stimulus" aria-live="polite"></div>
+    </div>
+  </div>
+  <!-- Overlay for rule changes -->
+  <div id="overlay" style="display:none;">Rule changed</div>
+
+  <!-- Score helper: reads email from query and posts to Netlify function. -->
+  <script>
+  function getEmail(){return new URLSearchParams(location.search).get('email')||'anonymous@example.com'}
+  async function postScore(email, game_id, best, streak){
+    try{
+      const r=await fetch('/.netlify/functions/score',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({email,game_id,best,streak})});
+      if(!r.ok) console.warn('Score post failed',await r.text());
+    }catch(e){console.warn('Score post error',e)}
+  }
+  </script>
+
+  <!-- Rule Shift game logic -->
+  <script>
+  (function(){
+    const email = getEmail();
+    const sessionEnd = Date.now() + 90000; // 90 seconds
+    let score = 0;
+    const timerEl = document.getElementById('timer');
+    const scoreEl = document.getElementById('scoreDisplay');
+    const ruleEl = document.getElementById('ruleText');
+    const stimEl = document.getElementById('stimulus');
+    const overlay = document.getElementById('overlay');
+    let currentStimulus = null;
+    let responded = false;
+    let lockoutUntil = 0;
+    let overlayActive = false;
+    // Rules array: each rule has a description and a check function
+    const rules = [
+      { desc: 'Tap if the shape is a circle', check: s => s.shape === 'circle' },
+      { desc: 'Tap if the shape is a square', check: s => s.shape === 'square' },
+      { desc: 'Tap if the shape is a triangle', check: s => s.shape === 'triangle' },
+      { desc: 'Tap if the color is red', check: s => s.color === 'red' },
+      { desc: 'Tap if the color is green', check: s => s.color === 'green' },
+      { desc: 'Tap if the color is blue', check: s => s.color === 'blue' },
+      { desc: 'Tap if the number is even', check: s => s.number % 2 === 0 },
+      { desc: 'Tap if the number is odd', check: s => s.number % 2 === 1 }
+    ];
+    let currentRule = Math.floor(Math.random() * rules.length);
+    ruleEl.textContent = rules[currentRule].desc;
+    // schedule rule changes
+    let nextRuleChangeAt = Date.now() + (10000 + Math.random()*10000);
+    // Stimulus generator
+    const shapes = ['circle','square','triangle'];
+    const colors = ['red','green','blue'];
+    function generateStimulus(){
+      const shape = shapes[Math.floor(Math.random()*shapes.length)];
+      const color = colors[Math.floor(Math.random()*colors.length)];
+      const number = 1 + Math.floor(Math.random()*9);
+      return {shape,color,number};
+    }
+    function renderStimulus(s){
+      stimEl.innerHTML = '';
+      const shapeSpan = document.createElement('span');
+      shapeSpan.className = 'shape';
+      // Choose unicode symbol based on shape
+      let symbol;
+      if(s.shape === 'circle') symbol = '●';
+      else if(s.shape === 'square') symbol = '■';
+      else symbol = '▲';
+      shapeSpan.textContent = symbol;
+      shapeSpan.style.color = s.color;
+      const numSpan = document.createElement('span');
+      numSpan.className = 'number';
+      numSpan.textContent = s.number;
+      numSpan.style.color = 'var(--text)';
+      stimEl.appendChild(shapeSpan);
+      stimEl.appendChild(numSpan);
+    }
+    // Timer update
+    const timerId = setInterval(() => {
+      const now = Date.now();
+      const remaining = sessionEnd - now;
+      const secs = Math.max(0, Math.ceil(remaining/1000));
+      timerEl.textContent = secs;
+      if(secs <= 0) finishSession();
+    }, 500);
+    // Stimulus interval
+    let stimIntervalId;
+    function scheduleStimuli(){
+      // Cancel previous if exists
+      if(stimIntervalId) clearInterval(stimIntervalId);
+      stimIntervalId = setInterval(() => {
+        const now = Date.now();
+        // Check rule change
+        if(now >= nextRuleChangeAt){
+          changeRule();
+          nextRuleChangeAt = now + (10000 + Math.random()*10000);
+          return;
+        }
+        if(overlayActive) return; // skip generating while overlay shows
+        currentStimulus = generateStimulus();
+        responded = false;
+        renderStimulus(currentStimulus);
+        // After ~1100ms evaluate missed response
+        setTimeout(() => {
+          if(!responded && rules[currentRule].check(currentStimulus)){
+            // Missed a correct stimulus: penalty
+            score--;
+            updateScore();
+          }
+        }, 1100);
+      }, 1200);
+    }
+    function changeRule(){
+      overlayActive = true;
+      overlay.style.display = 'flex';
+      // choose new rule not equal to current
+      let newRule;
+      do {
+        newRule = Math.floor(Math.random()*rules.length);
+      } while(newRule === currentRule);
+      currentRule = newRule;
+      // after delay, update rule text and hide overlay
+      setTimeout(() => {
+        ruleEl.textContent = rules[currentRule].desc;
+        overlay.style.display = 'none';
+        overlayActive = false;
+      }, 2000);
+    }
+    function updateScore(){
+      scoreEl.textContent = score;
+    }
+    function handleResponse(){
+      // ignore if overlay active or session ended
+      const now = Date.now();
+      if(now < lockoutUntil) return;
+      if(overlayActive) return;
+      if(!currentStimulus) return;
+      if(responded) return;
+      responded = true;
+      const match = rules[currentRule].check(currentStimulus);
+      if(match){
+        score++;
+      } else {
+        score--;
+        // small lockout on error (600ms)
+        lockoutUntil = now + 600;
+      }
+      updateScore();
+    }
+    // Input listeners
+    // Save handlers so they can be removed on finish
+    const clickHandler = () => { handleResponse(); };
+    const keyHandler = (e) => {
+      if(e.code === 'Space'){
+        e.preventDefault();
+        handleResponse();
+      }
+    };
+    document.body.addEventListener('click', clickHandler);
+    document.addEventListener('keydown', keyHandler);
+    function finishSession(){
+      clearInterval(timerId);
+      if(stimIntervalId) clearInterval(stimIntervalId);
+      // Remove listeners
+      document.body.removeEventListener('click', clickHandler);
+      document.removeEventListener('keydown', keyHandler);
+      // Clear stimulus
+      stimEl.innerHTML = '';
+      ruleEl.textContent = '';
+      // Show summary
+      const msg = document.createElement('div');
+      msg.style.marginTop = '20px';
+      msg.style.fontSize = '22px';
+      msg.innerHTML = `Session complete!<br/>Final score: <strong>${score}</strong>`;
+      stimEl.appendChild(msg);
+      // Post score
+      try{ postScore(email, 'flexibility:rule-shift', score, 0); }catch(_){}
+    }
+    // Kick off
+    scheduleStimuli();
+  })();
+  </script>
+</body>
+</html>

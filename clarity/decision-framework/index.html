@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Clarity – Decision Framework</title>
+  <!-- Shared dark theme for all modules -->
+  <style>
+    :root{
+      --bg:#0b1010;
+      --panel:rgba(10,14,14,.78);
+      --rim:rgba(19,193,177,.35);
+      --glow:rgba(19,193,177,.18);
+      --text:#f2fbf9;
+      --muted:#9fb3b0;
+      --accent:#13c1b1;
+    }
+    html,body{margin:0;background:var(--bg);color:var(--text);
+      font:500 16px/1.5 system-ui,Segoe UI,Inter,Arial,sans-serif;
+    }
+    .wrap{max-width:920px;margin:20px auto;padding:16px;}
+    .panel{background:var(--panel);border-radius:12px;padding:16px;
+      box-shadow:0 0 0 1px rgba(255,255,255,.06),0 20px 80px var(--glow);
+    }
+    label{display:block;margin-bottom:8px;}
+    label span{display:block;font-weight:600;margin-bottom:4px;}
+    input,textarea{background:#0f1414;color:var(--text);
+      border:1px solid rgba(255,255,255,.12);border-radius:8px;
+      padding:10px;width:100%;
+    }
+    textarea{min-height:60px;resize:vertical;}
+    button{background:rgba(0,0,0,.55);color:var(--text);
+      border:2px solid rgba(255,255,255,.85);border-radius:8px;
+      padding:8px 12px;font-weight:600;cursor:pointer;
+      font-size:14px;
+    }
+    .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px;}
+    .muted{color:var(--muted);font-size:14px;margin-top:6px;}
+    #report{width:100%;min-height:120px;margin-top:12px;display:none;font-size:14px;line-height:1.4;}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="panel" role="main">
+      <h1>Decision Framework</h1>
+      <p class="muted">Work through a structured process for an important decision. Reflect on your objective, options, pros and cons, and arrive at a clear choice.</p>
+      <form id="decisionForm">
+        <label for="decision"><span>Decision topic</span>
+          <input id="decision" name="decision" type="text" autocomplete="off" required />
+        </label>
+        <label for="objective"><span>Objective</span>
+          <textarea id="objective" name="objective" placeholder="What are you trying to achieve?" required></textarea>
+        </label>
+        <label for="option1"><span>Option 1</span>
+          <input id="option1" name="option1" type="text" autocomplete="off" required />
+        </label>
+        <label for="pros1"><span>Option 1 – Pros</span>
+          <textarea id="pros1" name="pros1" placeholder="List the benefits of this option"></textarea>
+        </label>
+        <label for="cons1"><span>Option 1 – Cons</span>
+          <textarea id="cons1" name="cons1" placeholder="List the drawbacks or risks"></textarea>
+        </label>
+        <label for="option2"><span>Option 2</span>
+          <input id="option2" name="option2" type="text" autocomplete="off" />
+        </label>
+        <label for="pros2"><span>Option 2 – Pros</span>
+          <textarea id="pros2" name="pros2"></textarea>
+        </label>
+        <label for="cons2"><span>Option 2 – Cons</span>
+          <textarea id="cons2" name="cons2"></textarea>
+        </label>
+        <label for="option3"><span>Option 3</span>
+          <input id="option3" name="option3" type="text" autocomplete="off" />
+        </label>
+        <label for="pros3"><span>Option 3 – Pros</span>
+          <textarea id="pros3" name="pros3"></textarea>
+        </label>
+        <label for="cons3"><span>Option 3 – Cons</span>
+          <textarea id="cons3" name="cons3"></textarea>
+        </label>
+        <label for="finalDecision"><span>Final decision</span>
+          <textarea id="finalDecision" name="finalDecision" placeholder="Which option do you choose and why?" required></textarea>
+        </label>
+      </form>
+      <div class="row">
+        <button id="generate" type="button">Generate Report</button>
+        <button id="save" type="button" style="display:none;">Save session</button>
+        <button id="download" type="button" style="display:none;">Download .txt</button>
+      </div>
+      <textarea id="report" aria-label="Decision Report"></textarea>
+    </div>
+  </div>
+
+  <!-- Score helper script (reads email and posts to backend) -->
+  <script>
+  function getEmail(){return new URLSearchParams(location.search).get('email')||'anonymous@example.com'}
+  async function postScore(email, game_id, best, streak){
+    try{
+      const r=await fetch('/.netlify/functions/score',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({email,game_id,best,streak})});
+      if(!r.ok) console.warn('Score post failed',await r.text());
+    }catch(e){console.warn('Score post error',e)}
+  }
+  </script>
+
+  <!-- Decision framework logic -->
+  <script>
+  (function(){
+    const email = getEmail();
+    let sessions = 0;
+    const form = document.getElementById('decisionForm');
+    const reportArea = document.getElementById('report');
+    const generateBtn = document.getElementById('generate');
+    const saveBtn = document.getElementById('save');
+    const downloadBtn = document.getElementById('download');
+    function buildReport(){
+      const data = {};
+      new FormData(form).forEach((value,key) => { data[key] = value.trim(); });
+      let report = '';
+      report += `Decision topic: ${data.decision || ''}\n\n`;
+      report += `Objective:\n${data.objective || ''}\n\n`;
+      function optionSection(idx){
+        const opt = data[`option${idx}`];
+        if(!opt) return '';
+        let s = `Option ${idx}: ${opt}\n`;
+        s += `Pros:\n${data[`pros${idx}`] || ''}\n`;
+        s += `Cons:\n${data[`cons${idx}`] || ''}\n\n`;
+        return s;
+      }
+      report += optionSection(1);
+      report += optionSection(2);
+      report += optionSection(3);
+      report += `Final decision:\n${data.finalDecision || ''}`;
+      return report.trim();
+    }
+    generateBtn.addEventListener('click', function(){
+      if(!form.reportValidity()){
+        return;
+      }
+      const report = buildReport();
+      reportArea.value = report;
+      reportArea.style.display = 'block';
+      saveBtn.style.display = 'inline-block';
+      downloadBtn.style.display = 'inline-block';
+      reportArea.focus();
+    });
+    saveBtn.addEventListener('click', function(){
+      sessions++;
+      try{ postScore(email, 'clarity:decision-framework', sessions, 0); }catch(_){}
+      saveBtn.textContent = 'Saved!';
+      saveBtn.disabled = true;
+      setTimeout(() => {
+        saveBtn.disabled = false;
+        saveBtn.textContent = 'Save session';
+      }, 1500);
+    });
+    downloadBtn.addEventListener('click', function(){
+      const text = reportArea.value;
+      const blob = new Blob([text], {type:'text/plain'});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'decision-report.txt';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 0);
+    });
+  })();
+  </script>
+</body>
+</html>

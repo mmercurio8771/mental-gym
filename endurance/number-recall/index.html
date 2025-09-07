@@ -1,0 +1,332 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Mental Gym – Number Recall</title>
+<meta name="color-scheme" content="dark">
+<style>
+  /* ===== Theme ===== */
+  :root{
+    --bg:#0B1010;
+    --panel:#0f1414;
+    --panel-border:#13c1b1;
+    --text:#f9fafb;
+    --muted:#9fb3b0;
+    --accent:#13c1b1;
+    --accent-2:#0ea295;
+    --ok:#2dd4bf;
+    --danger:#ef4444;
+  }
+
+  /* ===== Page layout ===== */
+  html,body{height:100%;margin:0;background:var(--bg);color:var(--text);
+    font:16px/1.45 system-ui,Segoe UI,Roboto,Inter,-apple-system,BlinkMacSystemFont;}
+  .screenwrap{
+    min-height:100%;
+    display:grid;
+    place-items:center;                /* centers the card on screen */
+     padding:clamp(12px, 4vw, 24px);
+  }
+
+  /* ===== Card ===== */
+  .card{
+    width:min(640px, 100%);
+    background:linear-gradient(180deg,var(--panel),#0b1111);
+    border:1px solid var(--panel-border);
+    border-radius:16px;
+    box-shadow:0 16px 48px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.02);
+    padding:20px;
+  }
+  h1{margin:0 0 6px 0; font-size:22px; letter-spacing:.2px}
+  p{margin:0 0 12px 0; color:var(--muted); font-size:14px; line-height:1.4}
+  .stats{display:flex; gap:12px; margin-top:8px; color:var(--muted); flex-wrap:wrap; font-size:14px}
+
+  /* ===== Display ===== */
+  .display{
+    width:100%;
+    margin:14px 0;
+    padding:20px 16px;
+    text-align:center;
+    font-size:clamp(24px, 6vw, 36px);
+    letter-spacing:.07em;
+    background:#0a1111;
+    border:2px dashed #1b2a2b;
+    border-radius:14px;
+    user-select:none;
+    -webkit-user-select:none;
+    -ms-user-select:none;
+    box-sizing:border-box;
+  }
+  .good{color:var(--ok)}
+  .accent{color:var(--accent)}
+
+  /* ===== Input ===== */
+  .answerBox{display:none}
+  input{
+    width:100%;
+    box-sizing:border-box;
+    margin-top:10px;
+    padding:10px 12px;
+    border-radius:10px;
+    background:#0b1212;
+    border:1px solid #1a2a2a;
+    color:var(--text);
+    outline:none;
+    transition:border-color .15s ease, box-shadow .15s ease;
+    font-size:16px;
+  }
+  input:focus{
+    border-color:var(--accent);
+    box-shadow:0 0 0 2px color-mix(in srgb, var(--accent) 20%, transparent);
+  }
+
+  /* ===== Buttons (clean spacing) ===== */
+  .row{width:100%; display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; align-items:center}
+  .btn{
+    flex:1;
+    text-align:center;
+    appearance:none;
+    cursor:pointer;
+    padding:8px 12px;
+    border-radius:10px;
+    border:1px solid transparent;
+    background:#0c1414;
+    color:var(--text);
+    transition:transform .06s ease, border-color .15s ease, background .15s ease;
+    font-size:14px;
+  }
+  .btn:hover{border-color:#223b3b}
+  .btn:active{transform:translateY(1px)}
+  .btn.primary{
+    background:var(--accent);
+    color:#0B1010;
+    font-weight:600;
+  }
+  .btn.primary:hover{
+    background:var(--accent-2);
+  }
+  .btn.ghost{
+    border:1px solid #1b2b2b;
+    opacity:.92;
+  }
+
+  .tip{margin-top:8px; color:var(--muted); font-size:13px}
+
+  /* Small screens */
+  @media (max-width:420px){
+    .display{font-size:34px}
+    h1{font-size:22px}
+  }
+</style>
+</head>
+<body>
+  <div class="screenwrap">
+    <div class="card">
+      <h1>Number Recall</h1>
+      <p>See a number, then type it from memory. Add one digit each round.</p>
+
+      <div class="stats">
+        <div>Round: <span id="round">0</span></div>
+        <div>Best: <span id="best">0</span></div>
+        <div>Streak: <span id="streak">0</span></div>
+      </div>
+
+      <div id="screen" class="display">Press Start</div>
+
+      <div id="answerBox" class="answerBox">
+        <input id="answer" inputmode="numeric" placeholder="Type the number…" autocomplete="off" />
+        <div class="row" style="margin-top:10px">
+          <button id="submit" class="btn primary">Submit</button>
+          <button id="giveup" class="btn ghost">Give up</button>
+        </div>
+      </div>
+
+      <div class="row" style="margin-top:6px">
+        <button id="start" class="btn primary">Start</button>
+        <button id="retry" class="btn" style="display:none">Try again</button>
+      </div>
+
+      <p class="tip">Tip: chunk the number into groups to improve recall.</p>
+    </div>
+  </div>
+
+<script>
+(function(){
+  const screen = document.getElementById('screen');
+  const startBtn = document.getElementById('start');
+  const retryBtn = document.getElementById('retry');
+  const answerBox = document.getElementById('answerBox');
+  const answer = document.getElementById('answer');
+  const submit = document.getElementById('submit');
+  const giveup = document.getElementById('giveup');
+  const rEl = document.getElementById('round');
+  const bEl = document.getElementById('best');
+  const sEl = document.getElementById('streak');
+
+  // --- HYBRID SAVING ADDITIONS (cloud + local) ---
+  const GAME_ID = "memory:number-recall";
+  const API_BASE = "/.netlify/functions";
+
+  function getQueryParam(name){
+    const u = new URL(window.location.href);
+    return u.searchParams.get(name) || "";
+  }
+
+  async function startSession(email){
+    const r = await fetch(`${API_BASE}/session-start`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email })
+    });
+    if (!r.ok) throw new Error("session failed");
+    const { token } = await r.json();
+    localStorage.setItem("mg_token", token);
+    return token;
+  }
+
+  async function loadScore(token, game_id){
+    const r = await fetch(`${API_BASE}/score?game_id=${encodeURIComponent(game_id)}`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    if (!r.ok) return null;
+    return await r.json();
+  }
+
+  async function saveScore(token, game_id, best, streak){
+    await fetch(`${API_BASE}/score`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ game_id, best, streak })
+    });
+  }
+  // --- END HYBRID SAVING ADDITIONS ---
+
+  let seq = '';
+  let round = 0;
+
+  // local-only defaults (still used)
+  let best = +localStorage.getItem('mg_memory_best') || 0;
+  let streak = +localStorage.getItem('mg_memory_streak') || 0;
+  bEl.textContent = best; sEl.textContent = streak;
+
+  // Attempt to auto-session using email in URL (Beehiiv will fill later). Fallback to local-only if not present.
+  (async () => {
+    try {
+      const urlEmail = getQueryParam("email");
+      if (urlEmail) {
+        await startSession(urlEmail.trim().toLowerCase());
+      }
+      const token = localStorage.getItem("mg_token");
+      if (token) {
+        const cloud = await loadScore(token, GAME_ID);
+        if (cloud) {
+          // merge: keep the higher best / streak between local and cloud
+          best = Math.max(best, cloud.best|0);
+          streak = Math.max(streak, cloud.streak|0);
+          bEl.textContent = best; sEl.textContent = streak;
+        }
+      }
+    } catch(_) {
+      // If cloud fails, game still works with localStorage only.
+    }
+  })();
+
+  const randDigit = () => Math.floor(Math.random()*10);
+
+  function showSequence(n){
+    seq = Array.from({length:n}, randDigit).join('');
+    screen.textContent = seq;
+    const ms = Math.max(1200, n*600);
+    answerBox.style.display = 'none';
+    setTimeout(()=>{
+      screen.textContent = 'Type the number';
+      answer.value = '';
+      answerBox.style.display = 'block';
+      answer.focus();
+    }, ms);
+  }
+
+  async function persist(){
+    // always save locally
+    localStorage.setItem('mg_memory_best', best);
+    localStorage.setItem('mg_memory_streak', streak);
+    // also try to save to cloud if we have a token
+    const token = localStorage.getItem("mg_token");
+    if (token) {
+      try { await saveScore(token, GAME_ID, best, streak); } catch(_) {}
+    }
+  }
+
+  function fail(){
+    screen.innerHTML = 'Nope. The number was <span class="accent">'+seq+'</span>.';
+    retryBtn.style.display = 'inline-block';
+    startBtn.style.display = 'none';
+    answerBox.style.display = 'none';
+    round = 0; rEl.textContent = round;
+    streak = 0; sEl.textContent = streak;
+    persist();
+  }
+
+  function next(){
+    round++; rEl.textContent = round;
+    best = Math.max(best, round-1); bEl.textContent = best;
+    if(round===1){
+      streak++; sEl.textContent = streak;
+    }
+    persist();
+    showSequence(round+2); // start with 2 digits, +1 each round
+  }
+
+  startBtn.onclick = () => { retryBtn.style.display='none'; startBtn.style.display='none'; next(); };
+  retryBtn.onclick = () => { retryBtn.style.display='none'; startBtn.style.display='none'; next(); };
+
+  submit.onclick = () => {
+    if(answer.value.trim() === seq){
+      screen.innerHTML = '<span class="good">Correct</span>. Next round…';
+      setTimeout(next, 650);
+    } else {
+      fail();
+    }
+  };
+  giveup.onclick = fail;
+  answer.addEventListener('keydown', e => { if(e.key==='Enter') submit.click(); });
+})();
+</script>
+
+<!-- AUTO-RESIZE SCRIPT (stable, no infinite growth) -->
+<script>
+(function () {
+  // If running inside an iframe, drop min-height:100% so height doesn't chase the parent
+  try {
+    if (window.parent !== window) {
+      document.documentElement.style.height = "auto";
+      document.body.style.height = "auto";
+      var sw = document.querySelector(".screenwrap");
+      if (sw) sw.style.minHeight = "auto";
+    }
+  } catch (e) {}
+
+  function getContentHeight() {
+    // Measure just the card + a little breathing room
+    var card = document.querySelector(".card");
+    var h = card ? Math.ceil(card.getBoundingClientRect().height) + 24 : document.body.scrollHeight;
+    return h;
+  }
+
+  function postHeight() {
+    var h = getContentHeight();
+    try { parent.postMessage({ frame: "number-recall", height: h }, "*"); } catch (e) {}
+  }
+
+  // Fire on load/resize and whenever layout changes
+  window.addEventListener("load", postHeight);
+  window.addEventListener("resize", postHeight);
+  var ro = new ResizeObserver(postHeight);
+  ro.observe(document.body);
+})();
+</script>
+
+
+</body>
+</html>

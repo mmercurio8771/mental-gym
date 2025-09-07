@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Mental Gym – Spatial Memory</title>
+  <meta name="color-scheme" content="dark" />
+  <style>
+    :root{
+      --bg:#0B1010; --panel:#0f1414; --panel-border:#13c1b1; --text:#f9fafb; --muted:#9fb3b0; --accent:#13c1b1; --accent-2:#0ea295; --ok:#2dd4bf; --danger:#ef4444;
+    }
+    html,body{height:100%;margin:0;background:var(--bg);color:var(--text);font:16px/1.45 system-ui,Segoe UI,Roboto,Inter,-apple-system,BlinkMacSystemFont;}
+    .screenwrap{min-height:100%;display:grid;place-items:center;padding:clamp(12px,4vw,24px);}
+    .card{width:min(640px,100%);background:linear-gradient(180deg,var(--panel),#0b1111);
+      border:1px solid var(--panel-border);border-radius:16px;box-shadow:0 16px 48px rgba(0,0,0,.35),inset 0 1px 0 rgba(255,255,255,.02);padding:20px;}
+    h1{margin:0 0 6px 0;font-size:22px;letter-spacing:.2px}
+    p{margin:0 0 12px 0;color:var(--muted);font-size:14px;line-height:1.4}
+    .stats{display:flex;gap:12px;margin-top:8px;color:var(--muted);flex-wrap:wrap;font-size:14px}
+    .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:16px 0;}
+    .cell{width:80px;height:80px;background:#0a1111;border:2px solid #1b2a2b;border-radius:10px;display:flex;align-items:center;justify-content:center;cursor:pointer;transition:background .2s ease;}
+    .cell.active{background:var(--accent);}
+    .cell.correct{background:var(--ok);}
+    .cell.wrong{background:var(--danger);}
+    .row{width:100%;display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;align-items:center}
+    .btn{flex:1;text-align:center;appearance:none;cursor:pointer;padding:8px 12px;border-radius:10px;border:1px solid transparent;background:#0c1414;color:var(--text);transition:transform .06s ease,border-color .15s ease,background .15s ease;font-size:14px;}
+    .btn:hover{border-color:#223b3b}
+    .btn:active{transform:translateY(1px)}
+    .btn.primary{background:var(--accent);color:#0B1010;font-weight:600;}
+    .btn.primary:hover{background:var(--accent-2);} 
+    .btn.ghost{border:1px solid #1b2b2b;opacity:.92;}
+  </style>
+</head>
+<body>
+  <div class="screenwrap">
+    <div class="card">
+      <h1>Spatial Memory</h1>
+      <p>Watch the sequence of highlighted squares and repeat the pattern. Sequences get longer each round.</p>
+      <div class="stats">
+        <div>Time left: <span id="timeLeft">120</span>s</div>
+        <div>Level: <span id="level">0</span></div>
+        <div>Your best: <span id="best">–</span></div>
+      </div>
+      <div class="grid" id="grid"></div>
+      <div class="row">
+        <button id="start" class="btn primary">Start</button>
+        <button id="retry" class="btn" style="display:none">Try again</button>
+        <button id="leaderboardBtn" class="btn ghost" style="display:none">Leaderboard</button>
+      </div>
+    </div>
+  </div>
+<script>
+(function(){
+  const GAME_ID='endurance:spatial-memory';
+  const API_BASE = '/.netlify/functions';
+  function getQueryParam(name){const u=new URL(window.location.href);return u.searchParams.get(name)||'';}
+  async function startSession(email){const r=await fetch(`${API_BASE}/session-start`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email})});if(!r.ok) throw new Error('session failed');const{token}=await r.json();localStorage.setItem('mg_token',token);return token;}
+  async function loadScore(token,game_id){const r=await fetch(`${API_BASE}/score?game_id=${encodeURIComponent(game_id)}`,{headers:{Authorization:`Bearer ${token}`}});if(!r.ok) return null;return await r.json();}
+  async function saveScore(token,game_id,best,streak){await fetch(`${API_BASE}/score`,{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${token}`},body:JSON.stringify({game_id,best,streak})});}
+  const gridEl=document.getElementById('grid');
+  const startBtn=document.getElementById('start');
+  const retryBtn=document.getElementById('retry');
+  const leaderboardBtn=document.getElementById('leaderboardBtn');
+  const timeEl=document.getElementById('timeLeft');
+  const levelEl=document.getElementById('level');
+  const bestEl=document.getElementById('best');
+  let best=Number(localStorage.getItem('mg_endurance_spatial_best'))||0;
+  if(best>0) bestEl.textContent=best;
+  (async()=>{try{const urlEmail=getQueryParam('email');if(urlEmail){await startSession(urlEmail.trim().toLowerCase());}const token=localStorage.getItem('mg_token');if(token){const cloud=await loadScore(token,GAME_ID);if(cloud){const cb=Number(cloud.best)||0;if(cb>best){best=cb;bestEl.textContent=best;}}}}catch(_){}})();
+  // generate grid
+  const cells=[];
+  for(let i=0;i<9;i++){const cell=document.createElement('div');cell.className='cell';cell.dataset.index=i;gridEl.appendChild(cell);cells.push(cell);} 
+  let sequence=[];let userIndex=0;let level=0;let timeLeft=120;let timerId=null;let playTimer=null;let awaitingInput=false;
+  function reset(){clearInterval(timerId);clearTimeout(playTimer);sequence=[];userIndex=0;level=0;timeLeft=120;timeEl.textContent='120';levelEl.textContent='0';cells.forEach(c=>{c.classList.remove('active','correct','wrong');c.style.pointerEvents='none';});startBtn.style.display='inline-block';retryBtn.style.display='none';leaderboardBtn.style.display='none';}
+  function begin(){reset();startBtn.style.display='none';cells.forEach(c=>{c.style.pointerEvents='none';});nextLevel();timerId=setInterval(()=>{timeLeft--;timeEl.textContent=String(timeLeft);if(timeLeft<=0){finish();}},1000);
+  }
+  function nextLevel(){level++;levelEl.textContent=String(level);userIndex=0;awaitingInput=false;generateSequence();playSequence();}
+  function generateSequence(){sequence=[];for(let i=0;i<level;i++){sequence.push(Math.floor(Math.random()*9));}}
+  function playSequence(){let idx=0;awaitingInput=false;cells.forEach(c=>{c.style.pointerEvents='none';});function highlight(){if(idx>=sequence.length){awaitingInput=true;cells.forEach(c=>{c.style.pointerEvents='auto';});return;}const index=sequence[idx];const cell=cells[index];cell.classList.add('active');setTimeout(()=>{cell.classList.remove('active');idx++;setTimeout(highlight,200);},600);}highlight();}
+  function handleCellClick(e){if(!awaitingInput||timeLeft<=0) return;const idx=parseInt(e.currentTarget.dataset.index);const expected=sequence[userIndex];if(idx===expected){e.currentTarget.classList.add('correct');setTimeout(()=>{e.currentTarget.classList.remove('correct');},200);userIndex++;if(userIndex>=sequence.length){awaitingInput=false;cells.forEach(c=>{c.style.pointerEvents='none';});setTimeout(nextLevel,600);} }else{e.currentTarget.classList.add('wrong');setTimeout(()=>{e.currentTarget.classList.remove('wrong');},400); // reset level but continue session
+      awaitingInput=false;cells.forEach(c=>{c.style.pointerEvents='none';});setTimeout(()=>{level--;if(level<1) level=0;nextLevel();},800);
+    }
+  }
+  function finish(){clearInterval(timerId);timerId=null;cells.forEach(c=>{c.style.pointerEvents='none';});retryBtn.style.display='inline-block';leaderboardBtn.style.display='inline-block';startBtn.style.display='none';// update best if higher
+    if(level>best){best=level;localStorage.setItem('mg_endurance_spatial_best',String(best));bestEl.textContent=best;const token=localStorage.getItem('mg_token');if(token){saveScore(token,GAME_ID,best,0).catch(()=>{});} }
+    try{const email=getQueryParam('email')||'anonymous@example.com';postScore(email,GAME_ID,level,0);}catch(_){}
+  }
+  function postScore(email,game_id,best,streak){fetch('/.netlify/functions/score',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,game_id,best,streak})}).catch(()=>{});}
+  startBtn.addEventListener('click',begin);
+  retryBtn.addEventListener('click',begin);
+  // Navigate to the dedicated leaderboard page for this module
+  leaderboardBtn.addEventListener('click',()=>{
+    window.location.href='/endurance/spatial-memory/leaderboard/';
+  });
+  cells.forEach(c=>{c.addEventListener('click',handleCellClick);});
+})();
+</script>
+</body>
+</html>
